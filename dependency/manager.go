@@ -1,109 +1,35 @@
-package dep_test
+package dependency
 
 import (
 	"crypto/sha256"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"testing"
 )
 
-type Pom struct {
-	Name          string       `xml:"name"`
-	ArtifactId    string       `xml:"artifactId"`
-	GroupId       string       `xml:"groupId"`
-	ParentGroupId string       `xml:"parent>groupId"`
-	Version       string       `xml:"version"`
-	ParentVersion string       `xml:"parent>version"`
-	Dependencies  []Dependency `xml:"dependencies>dependency"`
-	Properties    Properties   `xml:"properties"`
-	License       string       `xml:"licenses>license>name"`
-	LicenseUrl    string       `xml:"licenses>license>url"`
-}
+func ResolveFrom(dependency Dependency, dir string, repositories []string) error {
+	//fmt.Printf("ResolveFrom(%+v)\n", dependency)
 
-func (p *Pom) GetGroupId() string {
-	if p.GroupId != "" {
-		return p.GroupId
-	}
-	return p.ParentGroupId
-}
+	var url string
+	var selectedRepository string
 
-func (p *Pom) GetVersion() string {
-	if p.Version != "" {
-		return p.Version
-	}
-	return p.ParentVersion
-}
+	for _, repository := range repositories {
+		url = repository + dependency.JarPath()
 
-type Dependency struct {
-	ArtifactId string `xml:"artifactId"`
-	GroupId    string `xml:"groupId"`
-	Version    string `xml:"version"`
-	Scope      string `xml:"scope"`
-}
+		//fmt.Println("checking", url)
 
-type Properties struct {
-	Property []Property `xml:",any"`
-}
-
-func (p *Properties) Find(name string) string {
-	for _, prop := range p.Property {
-		if "${"+prop.Name+"}" == name {
-			return prop.Value
+		err := DownloadFile(filepath.Join(dir, filepath.Base(url)), url)
+		if err != nil {
+			//fmt.Println("Unable to access ", url)
+			continue
 		}
-	}
-	return ""
-}
-
-type Property struct {
-	Name  string
-	Value string
-}
-
-func (v *Property) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
-	v.Name = start.Name.Local
-	return d.DecodeElement(&v.Value, &start)
-}
-
-func (d *Dependency) JarPath() string {
-	return fmt.Sprintf("/%s/%s/%s/%s-%s.jar", strings.ReplaceAll(d.GroupId, ".", "/"), d.ArtifactId, d.Version, d.ArtifactId, d.Version)
-}
-
-func (d *Dependency) PomPath() string {
-	return fmt.Sprintf("/%s/%s/%s/%s-%s.pom", strings.ReplaceAll(d.GroupId, ".", "/"), d.ArtifactId, d.Version, d.ArtifactId, d.Version)
-}
-
-func TestSomething(t *testing.T) {
-	d := Dependency{
-		ArtifactId: "xs-jdbc-routing-datasource",
-		GroupId:    "com.sap.cloud.sjb",
-		Version:    "1.27.0",
-	}
-
-	dir, err := ioutil.TempDir("", "dependency-manager")
-	assert.NoError(t, err)
-
-	t.Cleanup(func() {
-		os.RemoveAll(dir)
-	})
-
-	err = ResolveFrom(d, dir)
-	assert.NoError(t, err)
-}
-
-func ResolveFrom(dependency Dependency, dir string) error {
-	fmt.Printf("ResolveFrom(%+v)\n", dependency)
-
-	url := "https://repo1.maven.org/maven2" + dependency.JarPath()
-	err := DownloadFile(filepath.Join(dir, filepath.Base(url)), url)
-	if err != nil {
-		return err
+		selectedRepository = repository
 	}
 
 	sha, err := Sha256(filepath.Join(dir, filepath.Base(url)))
@@ -112,7 +38,7 @@ func ResolveFrom(dependency Dependency, dir string) error {
 	}
 
 	//fmt.Println("getting pom...")
-	pomUrl := "https://repo1.maven.org/maven2" + dependency.PomPath()
+	pomUrl := selectedRepository + dependency.PomPath()
 	pom, err := GetPom(pomUrl)
 	if err != nil {
 		return err
@@ -155,7 +81,7 @@ func ResolveFrom(dependency Dependency, dir string) error {
 			}
 
 			if dependency.Version != "" {
-				err = ResolveFrom(dependency, dir)
+				err = ResolveFrom(dependency, dir, repositories)
 				if err != nil {
 					return err
 				}
@@ -181,7 +107,12 @@ func DownloadFile(filepath string, url string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		return errors.New("unexpected error code" + resp.Status)
+	}
+
 	// Create the file
+	//fmt.Println("downloading to ", filepath)
 	out, err := os.Create(filepath)
 	if err != nil {
 		return err
@@ -215,7 +146,7 @@ func GetPom(url string) (Pom, error) {
 		return Pom{}, fmt.Errorf("parse: %v", err)
 	}
 
-	fmt.Println("pom=", result)
+	//fmt.Println("pom=", result)
 
 	return result, nil
 }

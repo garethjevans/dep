@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+var Counter int
+var ExcludedGroupIds = []string{"org.apache.tomcat", "javax.servlet", "javax.mail", "org.springframework"}
+var added []string
+
 func ResolveFrom(dependency Dependency, dir string, repositories []string) error {
 	//fmt.Printf("ResolveFrom(%+v)\n", dependency)
 
@@ -29,7 +33,9 @@ func ResolveFrom(dependency Dependency, dir string, repositories []string) error
 			//fmt.Println("Unable to access ", url)
 			continue
 		}
+
 		selectedRepository = repository
+		break
 	}
 
 	sha, err := Sha256(filepath.Join(dir, filepath.Base(url)))
@@ -44,6 +50,14 @@ func ResolveFrom(dependency Dependency, dir string, repositories []string) error
 		return err
 	}
 
+	Counter++
+
+	added = append(added, fmt.Sprintf("%s:%s", pom.GetGroupId(), pom.ArtifactId))
+
+	if len(dependency.Parents) > 0 {
+		fmt.Printf("  # Parents %s\n", strings.Join(dependency.Parents, "=>"))
+	}
+	fmt.Printf("  # From %s\n", pomUrl)
 	fmt.Println("  [[metadata.dependencies]]")
 	fmt.Printf("    cpes = [\"cpe:2.3:a:%s:%s:%s:*:*:*:*:*:*:*\"]\n", pom.GetGroupId(), pom.ArtifactId, pom.GetVersion())
 	fmt.Printf("    id = \"%s\"\n", pom.ArtifactId)
@@ -64,30 +78,48 @@ func ResolveFrom(dependency Dependency, dir string, repositories []string) error
 	fmt.Println("")
 
 	for _, d := range pom.Dependencies {
-		if d.Scope != "test" {
-			var dependency Dependency
-			if strings.HasPrefix(d.Version, "${") {
-				dependency = Dependency{
-					ArtifactId: d.ArtifactId,
-					GroupId:    d.GroupId,
-					Version:    pom.Properties.Find(d.Version),
+		if !InList([]string{"test", "runtime"}, d.Scope) {
+			if !InList(ExcludedGroupIds, d.GroupId) {
+				var newDependency Dependency
+				if strings.HasPrefix(d.Version, "${") {
+					if d.Version == "${project.version}" {
+						newDependency = Dependency{
+							ArtifactId: d.ArtifactId,
+							GroupId:    d.GroupId,
+							Version:    pom.GetVersion(),
+							Parents:    append(dependency.Parents, fmt.Sprintf("%s:%s", pom.GetGroupId(), pom.ArtifactId)),
+						}
+					} else {
+						newDependency = Dependency{
+							ArtifactId: d.ArtifactId,
+							GroupId:    d.GroupId,
+							Version:    pom.Properties.Find(d.Version),
+							Parents:    append(dependency.Parents, fmt.Sprintf("%s:%s", pom.GetGroupId(), pom.ArtifactId)),
+						}
+					}
+				} else {
+					newDependency = Dependency{
+						ArtifactId: d.ArtifactId,
+						GroupId:    d.GroupId,
+						Version:    d.Version,
+						Parents:    append(dependency.Parents, fmt.Sprintf("%s:%s", pom.GetGroupId(), pom.ArtifactId)),
+					}
 				}
-			} else {
-				dependency = Dependency{
-					ArtifactId: d.ArtifactId,
-					GroupId:    d.GroupId,
-					Version:    d.Version,
-				}
-			}
 
-			if dependency.Version != "" {
-				err = ResolveFrom(dependency, dir, repositories)
-				if err != nil {
-					return err
+				if !InList(added, fmt.Sprintf("%s:%s", newDependency.GroupId, newDependency.ArtifactId)) {
+					if newDependency.Version != "" {
+						err = ResolveFrom(newDependency, dir, repositories)
+						if err != nil {
+							return err
+						}
+					} else {
+						fmt.Printf("  # unable to add %s:%s:%s\n", d.GroupId, d.ArtifactId, d.Version)
+					}
 				}
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -149,4 +181,13 @@ func GetPom(url string) (Pom, error) {
 	//fmt.Println("pom=", result)
 
 	return result, nil
+}
+
+func InList(in []string, test string) bool {
+	for _, i := range in {
+		if test == i {
+			return true
+		}
+	}
+	return false
 }

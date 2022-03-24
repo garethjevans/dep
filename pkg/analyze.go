@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"errors"
+	"fmt"
 	"github.com/garethjevans/dep/dependency"
 	"github.com/spf13/cobra"
 	"io/ioutil"
@@ -74,6 +75,8 @@ func (a *AnalyzeCmd) Run() error {
 	}
 
 	defer func() { os.RemoveAll(dir) }()
+
+	fmt.Printf("Total Dependency(s): %d\n", dependency.Counter)
 
 	return nil
 }

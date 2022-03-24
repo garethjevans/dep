@@ -38,6 +38,7 @@ type Dependency struct {
 	GroupId    string `xml:"groupId"`
 	Version    string `xml:"version"`
 	Scope      string `xml:"scope"`
+	Parents    []string
 }
 
 type Properties struct {
